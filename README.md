@@ -14,8 +14,7 @@ Airflow gerenciado ou DataHub em nuvem:
   bem mais completa — encoding/delimitador corretos por fonte, resolução
   de CNPJ por nome (com fallback de *fuzzy matching*, RapidFuzz),
   deduplicação de bancos e de empregadores, e carga num PostgreSQL
-  relacional (schemas raw/trusted/delivery). **É essa lógica de
-  tratamento que está rodando aqui**, orquestrada pelas mesmas 4 tasks do
+  relacional (schemas raw/trusted/delivery). Orquestrada pelas mesmas 4 tasks do
   Airflow (em vez do `run_all.py` do repositório original).
 
 ## 🧱 O que mudou em cada junção
