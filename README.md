@@ -1,8 +1,6 @@
 # 🚀 Pipeline EDB022 — Ingestão + Tratamento de Dados (versão local, via Docker)
 
-Este repositório junta  dois projetos do EDB022 numa única versão, com o
-tratamento de dados mais robusto entre eles, pronta para rodar
-**inteiramente na sua máquina** via Docker — sem depender de AWS (EC2/S3),
+Este repositório junta  dois projetos do EDB022 numa única versão, para rodar via Docker — sem depender de AWS (EC2/S3),
 Airflow gerenciado ou DataHub em nuvem:
 
 
