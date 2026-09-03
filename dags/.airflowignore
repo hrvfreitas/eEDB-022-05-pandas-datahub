@@ -1,0 +1,8 @@
+# O Airflow varre recursivamente todo arquivo .py dentro de dags/ procurando
+# objetos DAG. A pasta abaixo contém apenas módulos auxiliares (extract,
+# transform, quality, refined, metadata, common, db, fuzzy_match,
+# logging_config) importados pela DAG em ingestao_dados_dag.py — eles usam
+# import relativo (from .common import ...) e por isso quebram se o Airflow
+# tentar importá-los como script solto durante a varredura.
+# Cada linha é um regex casado contra o caminho do arquivo (relativo a dags/).
+^pipeline_edb022/

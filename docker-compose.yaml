@@ -1,0 +1,191 @@
+# docker-compose para execução LOCAL do pipeline EDB022.
+#
+# Diferenças em relação à versão original (AWS EC2):
+#   - Usa LocalExecutor (Postgres + 1 container) em vez de CeleryExecutor
+#     (Postgres + Redis + webserver + scheduler + worker + triggerer).
+#     Não há necessidade de fila distribuída para rodar numa máquina local.
+#   - O volume ./Dados é montado diretamente (os dados já vêm dentro deste
+#     repositório, não precisam ser buscados de outro lugar).
+#   - Upload para o S3 fica desligado por padrão (UPLOAD_TO_S3=false).
+#     Para reativar, defina UPLOAD_TO_S3=true e monte um arquivo de
+#     credenciais AWS válido em ./credentials/credentials.
+#
+# Há DOIS bancos Postgres neste compose, com finalidades diferentes:
+#   - "postgres"     -> metadados internos do Airflow (DAGs, execuções, etc.)
+#   - "postgres-dw"   -> dados do pipeline (schemas raw/trusted/delivery),
+#                        reproduzindo o repositório eEDB-022-02-fuzzy-main.
+#                        Fica exposto em localhost:5433 para você inspecionar
+#                        com psql/DBeaver/etc. Pode ser desligado com
+#                        LOAD_TO_POSTGRES=false, ficando só com os Parquet.
+#
+# Como usar:
+#   docker compose up airflow-init   # cria o banco e o usuário admin
+#   docker compose up -d             # sobe webserver + scheduler + postgres-dw
+#   Acesse http://localhost:8081 (usuário/senha: airflow / airflow)
+
+x-airflow-common:
+  &airflow-common
+  build: .
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    # --- configuração do pipeline EDB022 ---
+    EDB022_BASE_DIR: /opt/airflow/Dados
+    UPLOAD_TO_S3: ${UPLOAD_TO_S3:-false}
+    S3_BUCKET: ${S3_BUCKET:-edb022-datalake-089445119491}
+    AWS_REGION: ${AWS_REGION:-us-east-1}
+    AWS_SHARED_CREDENTIALS_FILE: /opt/airflow/credentials/credentials
+    # Postgres de dados (schemas raw/trusted/delivery) — diferente do
+    # Postgres de metadados do Airflow definido acima.
+    LOAD_TO_POSTGRES: ${LOAD_TO_POSTGRES:-true}
+    DW_DB_HOST: postgres-dw
+    DW_DB_PORT: "5432"
+    DW_DB_USER: ${DW_DB_USER:-postgres}
+    DW_DB_PASSWORD: ${DW_DB_PASSWORD:-postgres}
+    DW_DB_NAME: ${DW_DB_NAME:-case_dados}
+    FUZZY_SCORE_MINIMO: ${FUZZY_SCORE_MINIMO:-83}
+    # Metadados (DataHub) — ver dags/pipeline_edb022/metadata.py.
+    # O DataHub roda como um stack separado (datahub docker quickstart,
+    # ver README), não faz parte deste compose. Por padrão o GMS fica
+    # acessível ao host em http://localhost:8080; de DENTRO do container do
+    # Airflow, o host se enxerga como host.docker.internal.
+    EMIT_METADATA_TO_DATAHUB: ${EMIT_METADATA_TO_DATAHUB:-true}
+    DATAHUB_GMS_URL: ${DATAHUB_GMS_URL:-http://host.docker.internal:8080}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./config:/opt/airflow/config
+    - ./plugins:/opt/airflow/plugins
+    - ./Dados:/opt/airflow/Dados
+    - ./credentials:/opt/airflow/credentials
+    - ./tests:/opt/airflow/tests
+  extra_hosts:
+    # Necessário no Linux para host.docker.internal resolver para o host
+    # (no Docker Desktop/Mac/Windows já funciona sem isso). É o que permite
+    # o container do Airflow enxergar o DataHub rodando no host via
+    # 'datahub docker quickstart'.
+    - "host.docker.internal:host-gateway"
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on:
+    &airflow-common-depends-on
+    postgres:
+      condition: service_healthy
+    postgres-dw:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  # Postgres "de dados" do pipeline (schemas raw/trusted/delivery), separado
+  # do Postgres de metadados do Airflow acima. Exposto em localhost:5433
+  # para inspeção com psql/DBeaver/etc.
+  postgres-dw:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: ${DW_DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DW_DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DW_DB_NAME:-case_dados}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-dw-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${DW_DB_USER:-postgres}"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /sources/logs /sources/dags /sources/plugins /sources/Dados
+        chown -R "${AIRFLOW_UID:-50000}:0" /sources/{logs,dags,plugins,Dados}
+        exec /entrypoint airflow version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+    user: "0:0"
+    volumes:
+      - .:/sources
+
+  # Serviço para rodar comandos avulsos dentro do container (airflow, pytest, bash, etc).
+  # IMPORTANTE: "docker compose run airflow-cli <algo>" SUBSTITUI o "command"
+  # abaixo pelos argumentos passados, mas mantém o "entrypoint". Se <algo> não
+  # for reconhecido pelo entrypoint padrão da imagem do Airflow, ele tenta
+  # rodar como "airflow <algo>" (e falha, ex.: "airflow pytest" não existe).
+  # Por isso, para rodar pytest (ou qualquer outro comando que não seja
+  # "airflow ..."), use --entrypoint bash explicitamente, por exemplo:
+  #   docker compose run --rm --entrypoint bash airflow-cli -c "pytest /opt/airflow/tests/"
+  airflow-cli:
+    <<: *airflow-common
+    profiles:
+      - debug
+    entrypoint: /bin/bash
+    environment:
+      <<: *airflow-common-env
+      CONNECTION_CHECK_MAX_COUNT: "0"
+    command:
+      - -c
+      - airflow
+
+volumes:
+  postgres-db-volume:
+  postgres-dw-volume:

@@ -1,0 +1,6 @@
+#!/home/ccifusp/eEDB-022-05-pandas-datahub/datahub-env/bin/python3.11
+import sys
+from redash_toolbelt.examples.gdpr_scrub import lookup
+if __name__ == '__main__':
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
+    sys.exit(lookup())
