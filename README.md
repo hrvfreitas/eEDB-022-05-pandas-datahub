@@ -35,8 +35,7 @@ Airflow gerenciado ou DataHub em nuvem:
 | Metadados                      | DataHub, em EC2, lendo schema do S3                       | **DataHub**, rodando local (`datahub docker quickstart`), cataloga schema de Raw/Trusted/Delivery via task `emit_metadata`                            |
 
 A arquitetura de camadas é a mesma dos dois projetos — **Raw → Trusted →
-Delivery/Refined** — só a implementação do tratamento (Trusted) é a mais
-robusta das três versões.
+Delivery/Refined**.
 
 ## 📂 Estrutura
 
